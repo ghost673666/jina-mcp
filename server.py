@@ -3,7 +3,7 @@ import json
 import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 import uvicorn
 
@@ -24,6 +24,9 @@ async def mcp_handler(request: Request):
                 "serverInfo": {"name": "jina-fetcher", "version": "1.0.0"}
             }
         })
+
+    if method == "notifications/initialized":
+        return Response(status_code=200)
 
     if method == "tools/list":
         return JSONResponse({
@@ -59,7 +62,7 @@ async def mcp_handler(request: Request):
         "jsonrpc": "2.0",
         "id": msg_id,
         "error": {"code": -32601, "message": "Method not found"}
-    }, status_code=404)
+    })
 
 async def do_fetch(url: str) -> str:
     if not url:
@@ -78,7 +81,10 @@ async def do_fetch(url: str) -> str:
     except Exception as e:
         return f"抓取失败：{str(e)}"
 
-app = Starlette(routes=[Route("/mcp", mcp_handler, methods=["POST"])])
+app = Starlette(routes=[
+    Route("/mcp", mcp_handler, methods=["POST", "GET"]),
+    Route("/", mcp_handler, methods=["POST", "GET"]),
+])
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
