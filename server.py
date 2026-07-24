@@ -53,5 +53,6 @@ async def search_and_fetch(query: str, num_results: int = 3) -> str:
         return f"搜索失败：{str(e)}"
 
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.getenv("PORT", "8000"))
-    mcp.run(transport="streamable-http", port=port)
+    uvicorn.run(mcp._mcp_server, host="0.0.0.0", port=port)
