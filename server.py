@@ -1,6 +1,10 @@
 import os
-from mcp.server.fastmcp import FastMCP
 import httpx
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport.streamable_http import StreamableHTTPTransport
+import uvicorn
+from starlette.applications import Starlette
+from starlette.routing import Route
 
 mcp = FastMCP("Jina Web Fetcher")
 JINA_API_KEY = os.getenv("JINA_API_KEY", "")
@@ -52,6 +56,13 @@ async def search_and_fetch(query: str, num_results: int = 3) -> str:
     except Exception as e:
         return f"搜索失败：{str(e)}"
 
+async def handle_mcp(request):
+    transport = StreamableHTTPTransport()
+    app = mcp._mcp_server
+    return await transport.handle_request(request, app)
+
+app = Starlette(routes=[Route("/mcp", handle_mcp, methods=["POST", "GET"])])
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
