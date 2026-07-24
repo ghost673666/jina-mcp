@@ -1,20 +1,67 @@
 import os
+import json
 import httpx
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport.streamable_http import StreamableHTTPTransport
-import uvicorn
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from starlette.routing import Route
+import uvicorn
 
-mcp = FastMCP("Jina Web Fetcher")
 JINA_API_KEY = os.getenv("JINA_API_KEY", "")
 
-@mcp.tool()
-async def fetch_url(url: str) -> str:
-    """
-    抓取任意网页，返回干净的 Markdown 格式文本。
-    适用场景：写作素材收集、文章风格分析、观点提取。
-    """
+async def mcp_handler(request: Request):
+    body = await request.json()
+    method = body.get("method", "")
+    msg_id = body.get("id", 0)
+
+    if method == "initialize":
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "jina-fetcher", "version": "1.0.0"}
+            }
+        })
+
+    if method == "tools/list":
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "tools": [{
+                    "name": "fetch_url",
+                    "description": "抓取任意网页，返回干净的 Markdown 格式文本。适用场景：写作素材收集、文章风格分析、观点提取。",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "要抓取的网页完整地址"}
+                        },
+                        "required": ["url"]
+                    }
+                }]
+            }
+        })
+
+    if method == "tools/call":
+        tool_name = body["params"]["name"]
+        args = body["params"].get("arguments", {})
+        url = args.get("url", "")
+        result = await do_fetch(url)
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {"content": [{"type": "text", "text": result}]}
+        })
+
+    return JSONResponse({
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "error": {"code": -32601, "message": "Method not found"}
+    }, status_code=404)
+
+async def do_fetch(url: str) -> str:
     if not url:
         return "错误：请提供要抓取的网页 URL"
     headers = {}
@@ -22,46 +69,16 @@ async def fetch_url(url: str) -> str:
         headers["Authorization"] = f"Bearer {JINA_API_KEY}"
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"https://r.jina.ai/{url}", headers=headers)
-            response.raise_for_status()
-            text = response.text
-            max_chars = 15000
-            if len(text) > max_chars:
-                text = text[:max_chars] + f"\n\n... (内容过长，已截断。原文共 {len(text)} 字符)"
+            resp = await client.get(f"https://r.jina.ai/{url}", headers=headers)
+            resp.raise_for_status()
+            text = resp.text
+            if len(text) > 15000:
+                text = text[:15000] + "\n\n... (内容过长，已截断)"
             return text
-    except httpx.HTTPStatusError as e:
-        return f"抓取失败：HTTP {e.response.status_code}"
-    except httpx.TimeoutException:
-        return "抓取失败：请求超时，请稍后重试。"
     except Exception as e:
         return f"抓取失败：{str(e)}"
 
-@mcp.tool()
-async def search_and_fetch(query: str, num_results: int = 3) -> str:
-    """
-    搜索网页并返回内容。用于「搜一下XX话题的最新文章」。
-    """
-    if not JINA_API_KEY:
-        return "错误：搜索功能需要 JINA_API_KEY"
-    num_results = min(num_results, 5)
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                "https://s.jina.ai/",
-                params={"q": query, "num": num_results},
-                headers={"Authorization": f"Bearer {JINA_API_KEY}"}
-            )
-            resp.raise_for_status()
-            return resp.text
-    except Exception as e:
-        return f"搜索失败：{str(e)}"
-
-async def handle_mcp(request):
-    transport = StreamableHTTPTransport()
-    app = mcp._mcp_server
-    return await transport.handle_request(request, app)
-
-app = Starlette(routes=[Route("/mcp", handle_mcp, methods=["POST", "GET"])])
+app = Starlette(routes=[Route("/mcp", mcp_handler, methods=["POST"])])
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
