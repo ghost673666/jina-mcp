@@ -20,10 +20,8 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)
 
-# 地理编码器
 geolocator = Nominatim(user_agent="combo-mcp")
 
-# 世界国家 GeoJSON
 WORLD_GEOJSON = None
 try:
     r = httpx.get(
@@ -78,17 +76,17 @@ TOOLS = [
     },
     {
         "name": "generate_world_map",
-        "description": "生成带有标记点、路线和国家染色的世界交互地图。返回可访问的网页链接。\n\n参数说明:\n  title   - 地图标题\n  markers - JSON数组: [{name, lat, lng, severity, description}] 或 [{name, location, severity, description}]\n            severity: critical(红)/major(橙)/minor(黄)/watch(蓝)\n  routes  - JSON数组: [{name, points:[[lat,lng],...], color, dashed}]\n  zones   - JSON数组: [{country, color, opacity}] 国家支持英文名/中文名/缩写\n  theme   - 'dark' 或 'light'",
+        "description": "生成带有标记点、路线和国家染色的世界交互地图。返回可访问的网页链接。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "title": {"type": "string", "description": "地图标题"},
-                "markers": {"type": "string", "description": "标记点的JSON数组字符串"},
-                "routes": {"type": "string", "description": "路线的JSON数组字符串, 默认 []"},
-                "zones": {"type": "string", "description": "国家染色的JSON数组字符串, 默认 []"},
+                "markers": {"type": "string", "description": "标记点JSON数组"},
+                "routes": {"type": "string", "description": "路线JSON数组, 默认 []"},
+                "zones": {"type": "string", "description": "国家染色JSON数组, 默认 []"},
                 "theme": {"type": "string", "description": "dark 或 light, 默认 dark"},
-                "center_lat": {"type": "number", "description": "地图中心纬度, 默认 25"},
-                "center_lng": {"type": "number", "description": "地图中心经度, 默认 10"},
+                "center_lat": {"type": "number", "description": "中心纬度, 默认 25"},
+                "center_lng": {"type": "number", "description": "中心经度, 默认 10"},
                 "zoom": {"type": "integer", "description": "缩放级别, 默认 2"}
             },
             "required": ["title", "markers"]
@@ -103,7 +101,7 @@ TOOLS = [
 
 # ── 辅助函数 ──────────────────────────────────────────────
 
-def geocode(location: str) -> tuple | None:
+def geocode(location: str):
     for attempt in range(3):
         try:
             result = geolocator.geocode(location, timeout=10)
@@ -128,7 +126,7 @@ def cleanup_maps():
 
 async def do_fetch(url: str) -> str:
     if not url:
-        return "❌ 错误：请提供要抓取的网页 URL"
+        return "❌ 请提供 URL"
     headers = {}
     if JINA_API_KEY:
         headers["Authorization"] = f"Bearer {JINA_API_KEY}"
@@ -155,7 +153,7 @@ def do_geocode(location: str) -> str:
     return json.dumps({
         "location": location,
         "status": "failed",
-        "hint": "请使用更具体的地名，如 'Paris, France' 或 'Tokyo, Japan'"
+        "hint": "请用具体地名，如 'Paris, France'"
     }, ensure_ascii=False, indent=2)
 
 def do_generate_map(params: dict) -> str:
@@ -166,10 +164,9 @@ def do_generate_map(params: dict) -> str:
     zoom = int(params.get("zoom", 2))
 
     try:
-        markers_raw = params.get("markers", "[]")
+        marker_list = json.loads(params.get("markers", "[]"))
         route_list = json.loads(params.get("routes", "[]"))
         zone_list = json.loads(params.get("zones", "[]"))
-        marker_list = json.loads(markers_raw)
     except json.JSONDecodeError as e:
         return f"❌ JSON 解析错误: {e}"
 
@@ -184,9 +181,9 @@ def do_generate_map(params: dict) -> str:
     )
     plugins.Fullscreen().add_to(m)
 
-    # ── 国家染色 ──
+    # 国家染色
     if zone_list and WORLD_GEOJSON.get("features"):
-        zone_group = folium.FeatureGroup(name="🗺️ 影响区域")
+        zone_group = folium.FeatureGroup(name="影响区域")
         for z in zone_list:
             target = resolve_country(z.get("country", ""))
             color = z.get("color", "#ff1744")
@@ -206,9 +203,9 @@ def do_generate_map(params: dict) -> str:
                     break
         zone_group.add_to(m)
 
-    # ── 路线 ──
+    # 路线
     if route_list:
-        route_group = folium.FeatureGroup(name="🛤️ 路线")
+        route_group = folium.FeatureGroup(name="路线")
         for r in route_list:
             pts = r.get("points", [])
             if len(pts) >= 2:
@@ -231,10 +228,10 @@ def do_generate_map(params: dict) -> str:
                     ).add_to(route_group)
         route_group.add_to(m)
 
-    # ── 标记点 ──
+    # 标记点
     geo_count = 0
     if marker_list:
-        marker_group = folium.FeatureGroup(name="📍 事件标记")
+        marker_group = folium.FeatureGroup(name="事件标记")
         for mk in marker_list:
             if "lat" in mk and "lng" in mk:
                 lat, lng = mk["lat"], mk["lng"]
@@ -255,12 +252,13 @@ def do_generate_map(params: dict) -> str:
                 [lat, lng], radius=radius * 3, color=color,
                 weight=0, fill=True, fill_opacity=0.15,
             ).add_to(marker_group)
+
+            labels = {"critical":"一级","major":"二级","minor":"三级","watch":"观察哨"}
             popup = (
                 f"<b style='font-size:15px;'>{mk.get('name','')}</b><br>"
                 f"<span style='color:#999;font-size:11px;'>"
                 f"📅 {mk.get('date','?')} &nbsp;| "
-                f"<span style='color:{color};font-weight:700;'>"
-                f"{{'critical':'🔴一级','major':'🟠二级','minor':'🟡三级','watch':'🔵观察哨'}}.get(sev,'?')</span></span>"
+                f"<span style='color:{color};font-weight:700;'>{labels.get(sev,'?')}</span></span>"
                 f"<p style='font-size:12px;color:#bbb;margin:4px 0 0;'>{mk.get('description','')}</p>"
             )
             folium.CircleMarker(
@@ -273,7 +271,6 @@ def do_generate_map(params: dict) -> str:
 
     folium.LayerControl(collapsed=False).add_to(m)
 
-    # 标题
     m.get_root().html.add_child(folium.Element(f"""
     <div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;
                 background:rgba(10,10,20,0.85);backdrop-filter:blur(12px);color:#fff;
@@ -282,7 +279,6 @@ def do_generate_map(params: dict) -> str:
       {title}
     </div>"""))
 
-    # 保存
     map_id = uuid.uuid4().hex[:8]
     filename = f"map_{map_id}.html"
     filepath = STATIC_DIR / filename
@@ -292,20 +288,20 @@ def do_generate_map(params: dict) -> str:
     url = f"{PUBLIC_URL}/maps/{filename}" if PUBLIC_URL else f"/maps/{filename}"
 
     return "\n".join([
-        "✅ **地图已生成！**\n",
+        "✅ 地图已生成！\n",
         f"🔗 {url}",
         "",
         f"📍 标记: {len(marker_list)} | 🛤️ 路线: {len(route_list)} | 🗺️ 染色: {len(zone_list)}",
         f"🔍 自动地理编码: {geo_count} 个地名",
         "",
-        "💡 浏览器打开链接即可交互（缩放、拖拽、点击标记）",
+        "💡 浏览器打开链接即可交互",
     ])
 
 def do_list_maps() -> str:
     files = sorted(STATIC_DIR.glob("*.html"), key=lambda f: f.stat().st_mtime, reverse=True)
     if not files:
         return "📭 暂无地图"
-    lines = ["📂 **已生成的地图**\n"]
+    lines = ["📂 已生成的地图\n"]
     for f in files[:15]:
         size = f.stat().st_size / 1024
         mt = datetime.fromtimestamp(f.stat().st_mtime).strftime("%m-%d %H:%M")
@@ -316,7 +312,28 @@ def do_list_maps() -> str:
 # ── MCP JSON-RPC 处理 ─────────────────────────────────────
 
 async def mcp_handler(request: Request):
-    body = await request.json()
+    # GET 请求：返回服务信息
+    if request.method == "GET":
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": None,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "combo-toolbox", "version": "2.0.0"}
+            }
+        })
+
+    # POST 请求
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32700, "message": "Parse error"}
+        }, status_code=400)
+
     method = body.get("method", "")
     msg_id = body.get("id", 0)
 
@@ -384,10 +401,9 @@ async def home(request):
     <body><div class="card">
       <h1>🛠️ MCP 全能工具箱</h1>
       <p><span class="badge">🌐 网页抓取</span><span class="badge">🗺️ 世界地图</span></p>
-      <p>端点: /mcp 或 /</p>
+      <p>端点: /mcp</p>
     </div></body></html>
     """)
-
 
 # ── 应用 ──────────────────────────────────────────────────
 
@@ -400,4 +416,4 @@ app.mount("/maps", StaticFiles(directory=str(STATIC_DIR)))
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     print(f"🚀 工具箱启动 | 端口 {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)   
