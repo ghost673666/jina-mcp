@@ -22,16 +22,23 @@ STATIC_DIR.mkdir(exist_ok=True)
 
 geolocator = Nominatim(user_agent="combo-mcp")
 
+# 延迟加载——避免启动超时
 WORLD_GEOJSON = None
-try:
-    r = httpx.get(
-        "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json",
-        timeout=30
-    )
-    WORLD_GEOJSON = r.json()
-except Exception as e:
-    print(f"⚠️ GeoJSON 加载失败: {e}")
-    WORLD_GEOJSON = {"type": "FeatureCollection", "features": []}
+
+def get_world_geojson():
+    global WORLD_GEOJSON
+    if WORLD_GEOJSON is None:
+        try:
+            r = httpx.get(
+                "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json",
+                timeout=10
+            )
+            WORLD_GEOJSON = r.json()
+            print(f"✅ GeoJSON 加载成功 ({len(WORLD_GEOJSON['features'])} 个国家)")
+        except Exception as e:
+            print(f"⚠️ GeoJSON 加载失败: {e}")
+            WORLD_GEOJSON = {"type": "FeatureCollection", "features": []}
+    return WORLD_GEOJSON
 
 COUNTRY_ALIASES = {
     "usa": "United States of America", "united states": "United States of America",
@@ -181,14 +188,14 @@ def do_generate_map(params: dict) -> str:
     )
     plugins.Fullscreen().add_to(m)
 
-    # 国家染色
-    if zone_list and WORLD_GEOJSON.get("features"):
+    # 国家染色（延迟加载 GeoJSON）
+    if zone_list and get_world_geojson().get("features"):
         zone_group = folium.FeatureGroup(name="影响区域")
         for z in zone_list:
             target = resolve_country(z.get("country", ""))
             color = z.get("color", "#ff1744")
             opacity = float(z.get("opacity", 0.2))
-            for feat in WORLD_GEOJSON["features"]:
+            for feat in get_world_geojson()["features"]:
                 props = feat.get("properties", {})
                 candidates = [props.get(k, "") for k in ("name","name_long","sovereignt","admin","formal_en")]
                 if target in candidates:
@@ -312,7 +319,6 @@ def do_list_maps() -> str:
 # ── MCP JSON-RPC 处理 ─────────────────────────────────────
 
 async def mcp_handler(request: Request):
-    # GET 请求：返回服务信息
     if request.method == "GET":
         return JSONResponse({
             "jsonrpc": "2.0",
@@ -324,7 +330,6 @@ async def mcp_handler(request: Request):
             }
         })
 
-    # POST 请求
     try:
         body = await request.json()
     except Exception:
@@ -416,4 +421,4 @@ app.mount("/maps", StaticFiles(directory=str(STATIC_DIR)))
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     print(f"🚀 工具箱启动 | 端口 {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)   
+    uvicorn.run(app, host="0.0.0.0", port=port)                         
